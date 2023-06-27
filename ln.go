@@ -7,10 +7,12 @@ var PaymentHashExists = errors.New("invoice with that payment hash already exist
 type LN interface {
 	DecodeInvoice(string) (*DecodedInvoice, error)
 	AddInvoice(InvoiceParameters) (string, error)
-	WatchInvoice([]byte) (uint64, error)
+	WatchInvoice([]byte) (amount_paid_msat uint64, err error)
 	CancelInvoice([]byte) error
-	PayInvoice(p PaymentParameters) ([]byte, error)
+	PayInvoice(PaymentParameters) ([]byte, error)
 	SettleInvoice([]byte) error
+	// Lower bound routing fee and cltv_delta estimate to pay the invoice
+	EstimateRoutingFee(DecodedInvoice, uint64) (min_fee_msat uint64, min_cltv_delta uint64, err error)
 }
 
 type DecodedInvoice struct {
@@ -26,6 +28,18 @@ type DecodedInvoice struct {
 		IsRequired bool   `json:"is_required"`
 		IsKnown    bool   `json:"is_known"`
 	} `json:"features"`
+	Destination string      `json:"destination"`
+	RouteHints  []RouteHint `json:"route_hints"`
+}
+
+type RouteHint []HopHint
+
+type HopHint struct {
+	NodeId          string `json:"node_id"`
+	ChanId          uint64 `json:"chan_id,string"`
+	FeeBaseMsat     uint64 `json:"fee_base_msat"`
+	FeePPM          uint64 `json:"fee_proportional_millionths"`
+	CltvExpiryDelta uint64 `json:"cltv_expiry_delta"`
 }
 
 type InvoiceParameters struct {

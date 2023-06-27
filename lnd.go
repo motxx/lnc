@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -266,7 +267,7 @@ func (lnd *Lnd) PayInvoice(params PaymentParameters) ([]byte, error) {
 
 		switch message.Result.Status {
 		case "FAILED":
-			return nil, fmt.Errorf("Payment failed\n")
+			return nil, errors.New("payment failed")
 		case "UNKNOWN", "IN_FLIGHT", "":
 			time.Sleep(500 * time.Millisecond)
 		case "SUCCEEDED":
@@ -324,4 +325,92 @@ func (lnd *Lnd) SettleInvoice(preimage []byte) error {
 		return fmt.Errorf("v2/invoices/settle unhandled response: %#v", x)
 	}
 	return nil
+}
+
+func (lnd *Lnd) EstimateRoutingFee(invoice_params DecodedInvoice, amount_msat uint64) (uint64, uint64, error) {
+	if invoice_params.NumMsat == 0 && amount_msat == 0 {
+		return 0, 0, errors.New("need a non-zero amount to estimate fee")
+	} else if invoice_params.NumMsat == 0 {
+		amount_msat = invoice_params.NumMsat
+	}
+
+	fee_msat, cltv_delta, errs := lnd.estimateRoutingFee(invoice_params.Destination, amount_msat)
+	for _, route_hint := range invoice_params.RouteHints {
+		if len(route_hint) == 0 {
+			errs = errors.Join(errs, errors.New("zero hops in route hint"))
+			continue
+		}
+		f, c, e := lnd.estimateRoutingFee(route_hint[0].NodeId, amount_msat)
+		errs = errors.Join(errs, e)
+		if e != nil {
+			continue
+		}
+		for _, hop := range route_hint {
+			f += hop.FeeBaseMsat + (amount_msat * hop.FeePPM) / 1_000_000
+			c += hop.CltvExpiryDelta
+		}
+		if f < fee_msat {
+			fee_msat = f
+			cltv_delta = c
+		}
+	}
+	if fee_msat == 0 || cltv_delta == 0 {
+		return 0, 0, errors.Join(errs, errors.New("could not find route"))
+	}
+	return fee_msat, cltv_delta + invoice_params.CltvExpiry, nil
+}
+
+func (lnd *Lnd) estimateRoutingFee(destination string, amount_msat uint64) (uint64, uint64, error) {
+	destination_bytes, err := hex.DecodeString(destination)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	params, err := json.Marshal(struct {
+		Destination []byte `json:"dest"`
+		AmountSat   uint64 `json:"amt_sat,string"`
+	}{
+		Destination: destination_bytes,
+		AmountSat:   (amount_msat + 999) / 1000,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	buf := bytes.NewBuffer(params)
+	req, err := http.NewRequest(
+		"POST",
+		lnd.Host.JoinPath("/v2/router/route/estimatefee").String(),
+		buf,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+	req.Header.Add("Grpc-Metadata-macaroon", lnd.Macaroon)
+	resp, err := lnd.Client.Do(req)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var x interface{}
+		dec := json.NewDecoder(resp.Body)
+		err = dec.Decode(&x)
+		if err != nil {
+			return 0, 0, err
+		}
+		return 0, 0, fmt.Errorf("v2/invoices/hodl  response: %#v", x)
+	}
+
+	dec := json.NewDecoder(resp.Body)
+	estimate := struct {
+		RoutingFeeMsat uint64 `json:"routing_fee_msat,string"`
+		TimeLockDelay  uint64 `json:"time_lock_delay,string"`
+	}{}
+	err = dec.Decode(&estimate)
+	if err != nil && err != io.EOF {
+		return 0, 0, err
+	}
+
+	return estimate.RoutingFeeMsat, estimate.TimeLockDelay, nil
 }
