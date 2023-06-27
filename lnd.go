@@ -358,7 +358,7 @@ func (lnd *Lnd) EstimateRoutingFee(invoice_params DecodedInvoice, amount_msat ui
 			cltv_delta = c
 		}
 	}
-	if fee_msat == 0 || cltv_delta == 0 {
+	if fee_msat == 18446744073709551615 || cltv_delta == 18446744073709551615 {
 		return 0, 0, errors.Join(errs, errors.New("could not find route"))
 	}
 
