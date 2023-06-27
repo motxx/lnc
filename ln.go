@@ -32,7 +32,9 @@ type DecodedInvoice struct {
 	RouteHints  []RouteHint `json:"route_hints"`
 }
 
-type RouteHint []HopHint
+type RouteHint struct {
+	HopHints []HopHint `json:"hop_hints"`
+}
 
 type HopHint struct {
 	NodeId          string `json:"node_id"`

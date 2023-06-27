@@ -41,13 +41,11 @@ func (lnd *Lnd) DecodeInvoice(invoice string) (*DecodedInvoice, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		var x interface{}
-		dec := json.NewDecoder(resp.Body)
-		err = dec.Decode(&x)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("v1/payreq response: %#v", x)
+		return nil, fmt.Errorf("v1/payreq response: %s", string(body))
 	}
 
 	dec := json.NewDecoder(resp.Body)
@@ -330,23 +328,29 @@ func (lnd *Lnd) SettleInvoice(preimage []byte) error {
 func (lnd *Lnd) EstimateRoutingFee(invoice_params DecodedInvoice, amount_msat uint64) (uint64, uint64, error) {
 	if invoice_params.NumMsat == 0 && amount_msat == 0 {
 		return 0, 0, errors.New("need a non-zero amount to estimate fee")
-	} else if invoice_params.NumMsat == 0 {
+	} else if invoice_params.NumMsat > 0 {
 		amount_msat = invoice_params.NumMsat
 	}
 
-	fee_msat, cltv_delta, errs := lnd.estimateRoutingFee(invoice_params.Destination, amount_msat)
+	height, err := lnd.getBlockHeight()
+	if err != nil {
+		return 0, 0, err
+	}
+	fee_msat, cltv, errs := lnd.estimateRoutingFee(invoice_params.Destination, amount_msat)
+	cltv_delta := cltv - height
 	for _, route_hint := range invoice_params.RouteHints {
-		if len(route_hint) == 0 {
+		if len(route_hint.HopHints) == 0 {
 			errs = errors.Join(errs, errors.New("zero hops in route hint"))
 			continue
 		}
-		f, c, e := lnd.estimateRoutingFee(route_hint[0].NodeId, amount_msat)
+		f, c, e := lnd.estimateRoutingFee(route_hint.HopHints[0].NodeId, amount_msat)
 		errs = errors.Join(errs, e)
 		if e != nil {
 			continue
 		}
-		for _, hop := range route_hint {
-			f += hop.FeeBaseMsat + (amount_msat * hop.FeePPM) / 1_000_000
+		c -= height
+		for _, hop := range route_hint.HopHints {
+			f += hop.FeeBaseMsat + (amount_msat*hop.FeePPM)/1_000_000
 			c += hop.CltvExpiryDelta
 		}
 		if f < fee_msat {
@@ -357,13 +361,14 @@ func (lnd *Lnd) EstimateRoutingFee(invoice_params DecodedInvoice, amount_msat ui
 	if fee_msat == 0 || cltv_delta == 0 {
 		return 0, 0, errors.Join(errs, errors.New("could not find route"))
 	}
+
 	return fee_msat, cltv_delta + invoice_params.CltvExpiry, nil
 }
 
 func (lnd *Lnd) estimateRoutingFee(destination string, amount_msat uint64) (uint64, uint64, error) {
 	destination_bytes, err := hex.DecodeString(destination)
 	if err != nil {
-		return 0, 0, err
+		return 18446744073709551615, 18446744073709551615, err
 	}
 
 	params, err := json.Marshal(struct {
@@ -374,32 +379,30 @@ func (lnd *Lnd) estimateRoutingFee(destination string, amount_msat uint64) (uint
 		AmountSat:   (amount_msat + 999) / 1000,
 	})
 	if err != nil {
-		return 0, 0, err
+		return 18446744073709551615, 18446744073709551615, err
 	}
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		lnd.Host.JoinPath("/v2/router/route/estimatefee").String(),
+		lnd.Host.JoinPath("v2/router/route/estimatefee").String(),
 		buf,
 	)
 	if err != nil {
-		return 0, 0, err
+		return 18446744073709551615, 18446744073709551615, err
 	}
 	req.Header.Add("Grpc-Metadata-macaroon", lnd.Macaroon)
 	resp, err := lnd.Client.Do(req)
 	if err != nil {
-		return 0, 0, err
+		return 18446744073709551615, 18446744073709551615, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		var x interface{}
-		dec := json.NewDecoder(resp.Body)
-		err = dec.Decode(&x)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return 0, 0, err
+			return 18446744073709551615, 18446744073709551615, err
 		}
-		return 0, 0, fmt.Errorf("v2/invoices/hodl  response: %#v", x)
+		return 18446744073709551615, 18446744073709551615, fmt.Errorf("v2/router/route/estimatefee  response: %s", string(body))
 	}
 
 	dec := json.NewDecoder(resp.Body)
@@ -409,8 +412,44 @@ func (lnd *Lnd) estimateRoutingFee(destination string, amount_msat uint64) (uint
 	}{}
 	err = dec.Decode(&estimate)
 	if err != nil && err != io.EOF {
-		return 0, 0, err
+		return 18446744073709551615, 18446744073709551615, err
 	}
 
 	return estimate.RoutingFeeMsat, estimate.TimeLockDelay, nil
+}
+
+func (lnd *Lnd) getBlockHeight() (uint64, error) {
+	req, err := http.NewRequest(
+		"GET",
+		lnd.Host.JoinPath("v2/chainkit/bestblock").String(),
+		nil,
+	)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Add("Grpc-Metadata-macaroon", lnd.Macaroon)
+
+	resp, err := lnd.Client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return 0, err
+		}
+		return 0, fmt.Errorf("v2/chainkit/bestblock: %s", string(body))
+	}
+
+	dec := json.NewDecoder(resp.Body)
+
+	r := struct {
+		BlockHeight uint64 `json:"block_height"`
+	}{}
+	err = dec.Decode(&r)
+	if err != nil && err != io.EOF {
+		return 0, err
+	}
+	return r.BlockHeight, nil
 }
