@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -269,12 +268,7 @@ func (lnd *Lnd) PayInvoice(params PaymentParameters) ([]byte, error) {
 		case "UNKNOWN", "IN_FLIGHT", "":
 			time.Sleep(500 * time.Millisecond)
 		case "SUCCEEDED":
-			log.Printf("preimage: %s\n", message.Result.PreImage)
-			preimage, err := hex.DecodeString(message.Result.PreImage)
-			if err != nil {
-				log.Panicln(err)
-			}
-			return preimage, nil
+			return hex.DecodeString(message.Result.PreImage)
 		default:
 			return nil, fmt.Errorf("v2/router/send unhandled status: %s", message.Result.Status)
 		}
