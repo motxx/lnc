@@ -44,9 +44,11 @@ type HopHint struct {
 	CltvExpiryDelta uint64 `json:"cltv_expiry_delta"`
 }
 
+// If Hash is not nil, invoice will be a hold invoice,
+// which must be settled with SettleInvoice
 type InvoiceParameters struct {
 	Memo            string `json:"memo,omitempty"`
-	Hash            []byte `json:"hash"`
+	Hash            []byte `json:"hash,omitempty"`
 	ValueMsat       uint64 `json:"value_msat,string"`
 	DescriptionHash []byte `json:"description_hash,omitempty"`
 	Expiry          uint64 `json:"expiry,string"`

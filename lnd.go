@@ -57,6 +57,10 @@ func (lnd *Lnd) DecodeInvoice(invoice string) (*DecodedInvoice, error) {
 }
 
 func (lnd *Lnd) AddInvoice(p InvoiceParameters) (string, error) {
+	endpoint := "v1/invoices"
+	if p.Hash != nil {
+		endpoint = "v2/invoices/hodl"
+	}
 	params, err := json.Marshal(p)
 	if err != nil {
 		return "", err
@@ -64,7 +68,7 @@ func (lnd *Lnd) AddInvoice(p InvoiceParameters) (string, error) {
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		lnd.Host.JoinPath("v2/invoices/hodl").String(),
+		lnd.Host.JoinPath(endpoint).String(),
 		buf,
 	)
 	if err != nil {
@@ -88,7 +92,7 @@ func (lnd *Lnd) AddInvoice(p InvoiceParameters) (string, error) {
 				return "", PaymentHashExists
 			}
 		}
-		return "", fmt.Errorf("v2/invoices/hodl  response: %#v", x)
+		return "", fmt.Errorf("%s response: %#v", endpoint, x)
 	}
 	dec := json.NewDecoder(resp.Body)
 	pr := struct {
