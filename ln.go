@@ -2,13 +2,19 @@ package lnc
 
 import "errors"
 
-var PaymentHashExists = errors.New("invoice with that payment hash already exists")
+var (
+	PaymentHashExists = errors.New("invoice with that payment hash already exists")
+	PaymentFailed     = errors.New("payment failed")
+)
 
 type LN interface {
 	DecodeInvoice(string) (*DecodedInvoice, error)
 	AddInvoice(InvoiceParameters) (string, error)
 	WatchInvoice([]byte) (amount_paid_msat uint64, err error)
 	CancelInvoice([]byte) error
+	// If `error == nil`, the payment succeeded,
+	// else if `errors.Is(error, lnc.PaymentFailed)`, the payment failed,
+	// otherwise the payment status is unknown
 	PayInvoice(PaymentParameters) ([]byte, error)
 	SettleInvoice([]byte) error
 	// Lower bound routing fee and cltv_delta estimate to pay the invoice

@@ -268,7 +268,7 @@ func (lnd *Lnd) PayInvoice(params PaymentParameters) ([]byte, error) {
 
 		switch message.Result.Status {
 		case "FAILED":
-			return nil, errors.New("payment failed")
+			return nil, PaymentFailed
 		case "UNKNOWN", "IN_FLIGHT", "":
 			time.Sleep(500 * time.Millisecond)
 		case "SUCCEEDED":
