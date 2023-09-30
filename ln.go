@@ -9,8 +9,10 @@ var (
 
 type LN interface {
 	DecodeInvoice(string) (*DecodedInvoice, error)
+	// If InvoiceParameters.Hash is not nil, invoice will be a hold invoice,
+	// which must be settled with SettleInvoice
 	AddInvoice(InvoiceParameters) (string, error)
-	WatchInvoice([]byte) (amount_paid_msat uint64, err error)
+	WatchInvoice([]byte) (*InvoiceState, error)
 	CancelInvoice([]byte) error
 	// If `error == nil`, the payment succeeded,
 	// else if `errors.Is(error, lnc.PaymentFailed)`, the payment failed,
@@ -50,8 +52,6 @@ type HopHint struct {
 	CltvExpiryDelta uint64 `json:"cltv_expiry_delta"`
 }
 
-// If Hash is not nil, invoice will be a hold invoice,
-// which must be settled with SettleInvoice
 type InvoiceParameters struct {
 	Memo            string `json:"memo,omitempty"`
 	Hash            []byte `json:"hash,omitempty"`
@@ -60,6 +60,21 @@ type InvoiceParameters struct {
 	Expiry          uint64 `json:"expiry,string"`
 	CltvExpiry      uint64 `json:"cltv_expiry,string"`
 }
+
+type InvoiceState struct {
+	State
+	AmtPaid         uint64
+	CltvExpiryDelta uint64
+}
+
+type State int
+
+const (
+	Unknown State = iota
+	Canceled
+	Accepted
+	Settled
+)
 
 type PaymentParameters struct {
 	Invoice        string `json:"payment_request"`

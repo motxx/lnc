@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"time"
@@ -105,7 +106,7 @@ func (lnd *Lnd) AddInvoice(p InvoiceParameters) (string, error) {
 	return pr.PaymentRequest, nil
 }
 
-func (lnd *Lnd) WatchInvoice(hash []byte) (uint64, error) {
+func (lnd *Lnd) WatchInvoice(hash []byte) (*InvoiceState, error) {
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", lnd.Macaroon)
 	loc := *lnd.Host
@@ -125,18 +126,22 @@ func (lnd *Lnd) WatchInvoice(hash []byte) (uint64, error) {
 		Version:   13,
 	})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer ws.Close()
 	err = websocket.JSON.Send(ws, struct{}{})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	for {
 		message := struct {
 			Result struct {
 				State       string `json:"state"`
 				AmtPaidMsat uint64 `json:"amt_paid_msat,string"`
+				HTLCs       []struct {
+					AcceptHeight uint64 `json:"accept_height"`
+					ExpiryHeight uint64 `json:"expiry_height"`
+				} `json:"htlcs"`
 			} `json:"result"`
 			Error struct {
 				Message string `json:"message"`
@@ -144,25 +149,47 @@ func (lnd *Lnd) WatchInvoice(hash []byte) (uint64, error) {
 		}{}
 		err = websocket.JSON.Receive(ws, &message)
 		if err != nil && err != io.EOF {
-			return 0, err
+			return nil, err
 		}
 		if message.Error.Message != "" {
-			return 0, fmt.Errorf("v2/invoices/subscribe response: %s", message.Error.Message)
+			return nil, fmt.Errorf("v2/invoices/subscribe response: %s", message.Error.Message)
 		}
 
 		switch message.Result.State {
 		case "OPEN":
 			time.Sleep(500 * time.Millisecond)
-		case "ACCEPTED":
-			return message.Result.AmtPaidMsat, nil
-		case "SETTLED", "CANCELED":
-			return message.Result.AmtPaidMsat, fmt.Errorf("invoice %s before payment", message.Result.State)
+		case "ACCEPTED", "SETTLED":
+			var max_accept_height uint64
+			var min_expiry_height uint64 = math.MaxUint64
+			for _, htlc := range message.Result.HTLCs {
+				if htlc.AcceptHeight > max_accept_height {
+					max_accept_height = htlc.AcceptHeight
+				}
+				if htlc.ExpiryHeight < min_expiry_height {
+					min_expiry_height = htlc.ExpiryHeight
+				}
+			}
+			expiry_delta := min_expiry_height - max_accept_height
+			if min_expiry_height < max_accept_height {
+				return nil, errors.New("Inconsistent payment HTLCs")
+			}
+			state := Settled
+			if message.Result.State == "ACCEPTED" {
+				state = Accepted
+			}
+			return &InvoiceState{
+				State:           state,
+				AmtPaid:         message.Result.AmtPaidMsat,
+				CltvExpiryDelta: expiry_delta,
+			}, nil
+		case "CANCELED":
+			return &InvoiceState{State: Canceled}, nil
 		default:
-			return 0, fmt.Errorf("v2/invoices/subscribe unhandled state: %s", message.Result.State)
+			return nil, fmt.Errorf("v2/invoices/subscribe unhandled state: %s", message.Result.State)
 		}
 
 		if err == io.EOF {
-			return 0, err
+			return nil, err
 		}
 	}
 }
