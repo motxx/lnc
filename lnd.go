@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -403,6 +404,7 @@ func (lnd *Lnd) estimateRoutingFee(destination string, amount_msat uint64) (uint
 		Destination: destination_bytes,
 		AmountSat:   (amount_msat + 999) / 1000,
 	})
+	log.Printf("Destination: %s AmountSat: %d\n", destination, (amount_msat+999)/1000)
 	if err != nil {
 		return 18446744073709551615, 18446744073709551615, err
 	}
