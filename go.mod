@@ -1,4 +1,4 @@
-module github.com/lnproxy/lnc
+module github.com/motxx/lnc
 
 go 1.20
 
